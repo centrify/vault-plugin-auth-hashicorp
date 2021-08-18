@@ -1,0 +1,148 @@
+name: auth-development
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+    tags:
+      - v*
+
+env:
+  VAULT_VERSION: 1.8.1
+  VAULT_ADDR: http://127.0.0.1:8200
+  VAULT_PLUGINS_DIR: ./centrify
+
+jobs:
+
+  build:
+    name: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-18.04, ubuntu-latest, self-hosted]
+
+    runs-on: ${{ matrix.os }}
+    steps:
+
+      - name: Append Path
+        run: |
+          echo "./" >> $GITHUB_PATH
+          echo $PATH
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.17
+
+      - name: Checkout Auth plugin
+        uses: actions/checkout@v2
+
+      - name: Download dependencies
+        run: |
+          go mod download
+
+      - name: Build
+        run: |
+          make dev BINDIR=${VAULT_PLUGINS_DIR}
+
+      - name: Install Centrify Client (Ubuntu)
+        if: ${{ matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-18.04' }}
+        run: |
+          wget https://edge.clouddev.centrify.com/clidownload/devdog/centrifycc-deb9-x86_64.deb -q
+          sudo dpkg -i ./centrifycc-deb9-x86_64.deb 
+          cinfo --version
+
+      - name: Install Centrify Client (CentOS)
+        if: ${{ matrix.os == 'self-hosted' }}
+        run: |
+          wget https://edge.clouddev.centrify.com/clidownload/devdog/CentrifyCC-rhel6.x86_64.rpm -q
+          sudo rpm -i --force ./CentrifyCC-rhel6.x86_64.rpm
+          cinfo --version
+
+      - name: Enroll Centrify Client
+        run: |
+          sudo cenroll -n $(tr -dc A-Za-z0-9 </dev/urandom | head -c 13) \
+            -t ${{ secrets.VAULT_SERVICE_URL }} \
+            -c ${{ secrets.ENROLLMENT_CODE }} \
+            --features all \
+            -d testsdk:security/whoami \
+            -d testsdk:usermgmt/getusersrolesandadministrativerights \
+            -d 'testsdk:secrets/.*' \
+            -d testsdk:privilegeddata \
+            -V
+          cinfo
+
+      - name: Run vault
+        run: |
+          sudo pkill vault &
+          wget https://releases.hashicorp.com/vault/"$VAULT_VERSION"/vault_"$VAULT_VERSION"_linux_amd64.zip -q
+          unzip vault_"$VAULT_VERSION"_linux_amd64.zip
+          echo "Run vault server" | sudo ./vault server -dev -dev-root-token-id=root -dev-no-store-token -dev-plugin-dir=${VAULT_PLUGINS_DIR} -log-level=debug &
+          sleep 2
+          ./vault login root
+          ./vault plugin info auth centrify
+          ./vault auth enable centrify
+          ./vault write auth/centrify/config service_url=${{ secrets.VAULT_SERVICE_URL }} client_id=${{ secrets.VAULT_CLIENT_ID }} client_secret='${{ secrets.VAULT_CLIENT_SECRET }}' app_id=${{ secrets.VAULT_APP_ID }} policies=all_users
+          ./vault read auth/centrify/config
+
+      - name: Test
+        run: |
+          TESTCONF='${{secrets.CONFIG_STRING_PROXY}}' make test >> vault-plugin-auth.txt
+
+      - name: Test output
+        if: ${{ always() }}
+        run: |
+          cat vault-plugin-auth.txt
+          
+      - name: Slack Notification
+        if: ${{ always() }}
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          job_name: build-auth
+          fields: workflow
+          mention: here
+          if_mention: failure,cancelled
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+          MATRIX_CONTEXT: ${{ toJson(matrix) }}
+
+      - name: Extract branch name
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        shell: bash
+        run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/})"
+        id: extract_branch
+
+      - name: Send mail
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        uses: dawidd6/action-send-mail@v2
+        with:
+          server_address: ${{secrets.SMTP_SERVER}}
+          server_port: 587
+          username: ${{secrets.MAIL_USERNAME}}
+          password: ${{secrets.MAIL_PASSWORD}}
+          subject: Build job of ${{github.repository}} completed - ${{ job.status }}!
+          body: |
+            Build job of ${{github.repository}} on ${{ matrix.os }} completed - ${{ job.status }}
+            Action was run on branch - ${{ steps.extract_branch.outputs.branch }}
+            Link to the workflow - https://github.com/${{github.repository}}/actions/runs/${{github.run_id}}
+          to: ${{secrets.MAIL_TOLIST}}
+          from: GitHub@vault-plugin-auth
+          attachments: vault-plugin-auth.txt
+
+      - name: Unenroll Centrify Client
+        if: ${{ always() }}
+        run: |
+          sudo cunenroll -m -d
+
+      - name: Uninstall Centrify Client (Ubuntu)
+        if: ${{ matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-18.04' }}
+        run: |
+          sudo apt purge -y centrifycc
+
+      - name: Uninstall Centrify Client (CentOS)
+        if: ${{ matrix.os == 'self-hosted' }}
+        run: |
+          sudo yum -y erase CentrifyCC

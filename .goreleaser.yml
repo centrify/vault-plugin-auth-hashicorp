@@ -1,0 +1,47 @@
+# The documentation about GoRelease available at http://goreleaser.com
+
+dist: pkg
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/vault-plugin-auth-hashicorp
+
+    binary: centrify
+
+    ldflags:
+      - -s -w
+      - -X github.com/centrify/vault-plugin-auth-hashicorp.pluginVersion={{ .Tag }}
+      - -X github.com/centrify/vault-plugin-auth-hashicorp.pluginGitCommit={{ .FullCommit }}
+
+    env:
+      - CGO_ENABLED=0
+
+    goos:
+      - linux
+
+    goarch:
+      - amd64
+      - arm
+      - arm64
+
+archives:
+  - replacements:
+      linux: Linux
+      amd64: x86_64
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ .ShortCommit }}-dev"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - 'Merge pull request'
+      - 'Merge branch'

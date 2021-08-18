@@ -1,0 +1,9 @@
+pkg/*
+bin/*
+cmd/vault-plugin-auth-hashicorp/vault-plugin-auth-hashicorp
+.vscode/
+.idea
+vendor/*
+*.test
+*.out
+testconfig.json
