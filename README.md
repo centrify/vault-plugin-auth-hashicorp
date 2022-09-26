@@ -1,5 +1,11 @@
 # Vault Plugin: Centrify Identity Platform Auth Backend
 
+# PUBLIC ARCHIVE
+
+> ***NOTE***
+> This repo is archived.
+> This is still available under the licensing terms, but is not being actively developed or updated any further. Please see [DelineaXPM](https://github.com/DelineaXPM) for active projects.
+
 This is a standalone backend plugin for use with [HashiСorp Vault][vault-gh].
 This plugin allows for Centrify Identity Platform users accounts to authenticate with Vault.
 
